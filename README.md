@@ -5,8 +5,8 @@ Hello World!
 
 Three interactive plots to show on my app:
 
-1. Accumulated relative returns of portfolio and its all component stocks against SP500.
+1. **Line plot** for accumulated relative returns of the portfolio and its all component stocks against SP500.
 
-2. Line, ribbon and rug graphs for monthly relative return of portfolio.
+2. **Line, ribbon and rug plots** for monthly relative return of the portfolio.
 
-3. Column plot of total return of portfolio and its all component stocks, faceted by year.
+3. **Faceted waterfall plot** of the portfolio's yearly returns.
