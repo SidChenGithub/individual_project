@@ -107,7 +107,7 @@ myportfolio_data <- left_join(portfolio_returns_tq_rebalanced_monthly,
     myportfolio_data %>% 
     lm(monthly_return ~ SPY_return, data = .) %>% 
     augment() %>% 
-    mutate(date = myportfolio_data$date
+    mutate(date = myportfolio_data$date)
   
 ```
 
