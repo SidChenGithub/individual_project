@@ -1,0 +1,187 @@
+---
+title: "Flexdashboard_test"
+author: "Sid Chen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    highlight: zenburn
+    number_sections: yes
+    toc: yes
+    toc_float: yes
+    code_folding: show
+    latex_engine: xelatex
+---
+
+
+```{r, setup, echo=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE, 
+  warning = FALSE, 
+  tidy=FALSE,     # display code as typed
+  size="small")   # slightly smaller font for code
+options(digits = 3)
+
+# default figure size
+knitr::opts_chunk$set(
+  fig.width=6.75, 
+  fig.height=6.75,
+  fig.align = "center"
+)
+```
+
+
+```{r load-libraries, echo=FALSE}
+library(tidyverse)
+library(shiny)
+library(highcharter)
+library(tidyquant)
+library(timetk)
+library(scales)
+library(broom)
+library(highcharter)
+library(plotly)
+```
+
+```{r}
+
+# Get symbols from user  
+symbols <- c("AAPL", "BA", "DIS", "GS", "MRK")
+
+# Get weights from user and make sure they add up to 100
+weights <- c(0.25, 0.25, 0.2, 0.2, 0.1)
+
+myStocks <- symbols %>% 
+  tq_get(get  = "stock.prices",
+         from = Sys.Date() - 1800,
+         to   = Sys.Date()) %>%
+  group_by(symbol) 
+
+# get prices for SPY, the SP500 ETF
+spy <- tq_get("SPY", get  = "stock.prices",
+              from = Sys.Date() - 1800,
+              to   =  Sys.Date()) 
+
+#calculate monthly  returns for the chosen stocks
+myStocks_returns_monthly <- myStocks %>% 
+  tq_transmute(select     = adjusted, 
+               mutate_fun = periodReturn, 
+               period     = "monthly", 
+               type       = "arithmetic",
+               col_rename = "monthly_return",
+               cols = c(nested.col)) 
+
+
+#calculate SPY monthly  returns
+spy_returns_monthly <- spy %>%
+  tq_transmute(select     = adjusted, 
+               mutate_fun = periodReturn, 
+               period     = "monthly", 
+               type       = "arithmetic",
+               col_rename = "SPY_return",
+               cols = c(nested.col))
+
+#calculate portfolio monthly  returns - weights * returns
+portfolio_returns_tq_rebalanced_monthly <-
+  tq_portfolio(data = myStocks_returns_monthly,
+               assets_col = symbol,
+               returns_col = monthly_return,
+               weights = weights,
+               col_rename = "monthly_return",
+               wealth.index = FALSE)
+  
+myportfolio_data <- left_join(portfolio_returns_tq_rebalanced_monthly, 
+                              spy_returns_monthly, 
+                              by="date") %>% 
+                              na.omit() %>% 
+                    mutate(
+                      # cumsum() and cumprod() calcuale the running sum/product
+                      # here we use cumprod, as we calcualte return using type=arithmetic
+                      # if we had calculated return using log, we would need cumsum
+                        portfolio_growth =  100 * cumprod(1 + monthly_return),
+                        sp500_growth = 	100 * cumprod(1 + SPY_return)
+                    )
+
+
+  portfolio_model_augmented <- 
+    myportfolio_data %>% 
+    lm(monthly_return ~ SPY_return, data = .) %>% 
+    augment() %>% 
+    mutate(date = myportfolio_data$date)
+  
+```
+
+Row {data-height=280}
+-----------------------------------------------------------------------
+### Growth of $100 invested in portfolio (blue) vs. SP500 (red)
+
+
+```{r}
+#use plotly to create interactive chart, so when we place our cursor on ti, we can see values
+
+  fubar1 <- myportfolio_data %>% 
+    ggplot(aes(x=date))+
+    geom_line(aes(y=portfolio_growth),
+              colour="#001e62")+
+    geom_line(aes(y=sp500_growth),
+              colour="tomato")+
+    scale_y_continuous(labels = scales::dollar)+
+    theme_minimal()+
+    labs(x="", y="")  
+    
+  ggplotly(fubar1)
+
+
+```
+
+
+Row 2 {data-height=280}
+-----------------------------------------------------------------------
+### CAPM: Portfolio Returns vs Market Index (SP500) returns
+
+```{r}
+#use highchart to get interactive scatter plot
+
+highchart() %>% 
+  hc_title(text = "Portfolio Returns vs SP500 returns with Regression Line") %>% 
+  hc_add_series(portfolio_model_augmented, 
+                type = "scatter",
+                color = "cornflowerblue",
+                hcaes(x = round(SPY_return, 4), 
+                      y = round(monthly_return, 4),
+                      date = date), 
+                name = "Returns") %>%
+  hc_add_series(portfolio_model_augmented, 
+                 type = "line", 
+                 enableMouseTracking = FALSE,
+                 hcaes(x = SPY_return, y = .fitted), 
+                 name = "CAPM Beta = Slope of Line") %>% 
+  hc_xAxis(title = list(text = "Market Returns")) %>% 
+  hc_yAxis(title = list(text = "Portfolio Returns")) %>% 
+  hc_tooltip(formatter = JS("function(){
+     return ('portfolio: ' + this.y + '  SP500: ' + this.x +  
+     '  date: ' + this.point.date)}"))%>% 
+  hc_add_theme(hc_theme_flat())
+
+```
+
+
+Row 3 {data-height=180}
+----------------------------------
+### CAPM Model Results, fitted through entire time interval
+
+```{r}
+
+myportfolio_data %>% 
+    lm(monthly_return ~ SPY_return, data = .) %>% 
+    tidy(conf.int=TRUE) %>% 
+  mutate(term = c("alpha", "beta"))
+
+```
+
+
+
+
+
+
+
