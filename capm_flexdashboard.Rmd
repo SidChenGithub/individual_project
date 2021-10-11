@@ -216,7 +216,7 @@ highchart() %>%
   hc_tooltip(formatter = JS("function(){
      return ('portfolio: ' + this.y + '  SP500: ' + this.x +  
      '  date: ' + this.point.date)}"))%>% 
-  hc_add_theme(hc_theme_flat())
+  hc_add_theme(hc_theme_flat()
 
 })
 ```
