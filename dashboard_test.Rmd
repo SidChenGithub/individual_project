@@ -1,0 +1,384 @@
+---
+title: "Flexdashboard_test"
+author: "Sid Chen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    highlight: zenburn
+    number_sections: yes
+    toc: yes
+    toc_float: yes
+    code_folding: show
+    latex_engine: xelatex
+---
+
+
+```{r, setup, echo=FALSE}
+knitr::opts_chunk$set(
+  message = FALSE, 
+  warning = FALSE, 
+  tidy=FALSE,     # display code as typed
+  size="small")   # slightly smaller font for code
+options(digits = 3)
+
+# default figure size
+knitr::opts_chunk$set(
+  fig.width=6.75, 
+  fig.height=6.75,
+  fig.align = "center"
+)
+```
+
+
+```{r load-libraries, echo=FALSE}
+library(tidyverse)
+library(shiny)
+library(highcharter)
+library(tidyquant)
+library(timetk)
+library(scales)
+library(broom)
+library(highcharter)
+library(plotly)
+library(ggthemes)
+library(data.table)
+```
+
+```{r}
+
+# Get symbols from user  
+symbols <- c("AAPL", "DIS", "BA", "GS", "MRK")
+
+# Get weights from user and make sure they add up to 100
+weights <- c(0.25, 0.25, 0.2, 0.2, 0.1)
+
+myStocks <- symbols %>% 
+  tq_get(get  = "stock.prices",
+         from = Sys.Date() - 1800,
+         to   = Sys.Date()) %>%
+  group_by(symbol) 
+
+# get prices for SPY, the SP500 ETF
+spy <- tq_get("SPY",
+              get  = "stock.prices",
+              from = Sys.Date() - 1800,
+              to   = Sys.Date()) 
+
+tbill <- tq_get("DTB4WK",
+                get = "economic.data",
+                from = Sys.Date() - 1800,
+                to   = Sys.Date())
+
+```
+
+```{r}
+#calculate monthly returns for the chosen stocks
+myStocks_returns_monthly <- myStocks %>%
+  tq_transmute(select     = adjusted, 
+               mutate_fun = periodReturn, 
+               period     = "monthly", 
+               type       = "arithmetic",
+               col_rename = "monthly_return",
+               cols = c(nested.col))
+
+#convert the monthly returns into wide table
+myStocks_returns_monthly_wide <- myStocks_returns_monthly %>% 
+  pivot_wider(names_from = symbol,
+              values_from = monthly_return)
+
+#change names of columns for easier reference
+colnames(myStocks_returns_monthly_wide) <- c("date", "stock1", "stock2", "stock3", "stock4", "stock5")
+
+#calculate portfolio monthly returns - weights * returns
+portfolio_returns_tq_rebalanced_monthly <-
+  tq_portfolio(data = myStocks_returns_monthly,
+               assets_col = symbol,
+               returns_col = monthly_return,
+               weights = weights,
+               col_rename = "portfolio_return",
+               wealth.index = FALSE)
+
+#calculate SPY monthly  returns
+spy_returns_monthly <- spy %>%
+  tq_transmute(select     = adjusted, 
+               mutate_fun = periodReturn, 
+               period     = "monthly", 
+               type       = "arithmetic",
+               col_rename = "SPY_return",
+               cols = c(nested.col))
+
+#convert frequency of t-bill data from daily to monthly and convert the yields from annual to monthly
+tbill_yield_monthly <- tbill %>% 
+  na.omit() %>% 
+  tq_transmute(select     = price, 
+               mutate_fun = apply.monthly,
+               FUN        = mean,
+               col_rename = "t_bill_yield",
+               cols = c(nested.col)) %>% 
+  mutate(t_bill_yield = (t_bill_yield/100)/12)
+
+#join all returns together
+myportfolio_data <- left_join(myStocks_returns_monthly_wide,
+                              portfolio_returns_tq_rebalanced_monthly, 
+                              by="date") %>%
+  na.omit()
+
+myportfolio_data <- left_join(myportfolio_data,
+                              spy_returns_monthly, 
+                              by="date") %>%
+  na.omit()
+
+
+```
+
+```{r}
+
+#calculate portfolio's relative return over SP500
+myportfolio_relative_returns <- myportfolio_data %>% 
+  select(date, portfolio_return, SPY_return) %>% 
+  mutate(relative_return = portfolio_return - SPY_return,
+         positive_relative_return = pmax(relative_return, 0),
+         negative_relative_return = pmin(relative_return, 0))
+
+```
+
+```{r}
+
+#calculate growth of single stocks, portfolio and SP500
+myportfolio_growth <- myportfolio_data %>% 
+    
+  #use cumprod() to calcuale the running product and obtain cumulative return
+  mutate(stock1_growth = cumprod(1 + stock1),
+         stock2_growth = cumprod(1 + stock2),
+         stock3_growth = cumprod(1 + stock3),
+         stock4_growth = cumprod(1 + stock4),
+         stock5_growth = cumprod(1 + stock5),
+         portfolio_growth = cumprod(1 + portfolio_return),
+         sp500_growth = cumprod(1 + SPY_return)) %>% 
+  select(1, 9:15)
+  
+#choose only the last row and segment it
+myportfolio_todayvalue <- myportfolio_growth[nrow(myportfolio_growth),]
+component_stocks_value <- myportfolio_todayvalue[,2:6]
+portfolio_value <- myportfolio_todayvalue$portfolio_growth
+SPY_value <- myportfolio_todayvalue$sp500_growth
+
+#calculate each component stock's relative value over SP500
+component_stocks_value <- (component_stocks_value - SPY_value) * weights
+
+#create a new dataframe to include all values we have
+asset <- c("SP500", symbols, "Portfolio")
+incremental_value <- c(SPY_value,
+                transpose(component_stocks_value)$V1,
+                portfolio_value)
+myportfolio_value <- data_frame(asset, incremental_value)
+
+#convert the asset names into factors, do some preparing steps for the waterfall chart
+myportfolio_value <- myportfolio_value %>% 
+  mutate(asset = factor(asset,
+                        level = asset),
+         place = seq_along(incremental_value),
+         type = ifelse(incremental_value > 0,
+                       "Positive relative return",
+                       "Negative relative return"),
+         end = cumsum(incremental_value),
+         start = c(0, end[-nrow(myportfolio_value)]))
+
+myportfolio_value[myportfolio_value$asset %in% 
+                    c("SP500", "Portfolio"), "type"] <- "Absolute return"
+myportfolio_value$type <- as.factor(myportfolio_value$type)
+
+myportfolio_value$end[nrow(myportfolio_value)] <- 0
+
+#define the colors that will be used in the plot
+type_colors <- c("Absolute return" = "dodgerblue3",
+                 "Positive relative return" = "green4",
+                 "Negative relative return" = "red3")
+
+```
+
+  
+```{r}
+
+myportfolio_condensed <- myportfolio_data %>% 
+  select(portfolio_return, SPY_return)
+
+#calculate some statistical attributes of portfolio performance
+monthly_return <- (portfolio_value)**(1/nrow(myportfolio_condensed)) - 1
+
+#annual_return <- (1 + monthly_return)**12 - 1
+
+monthly_std <-  sd(myportfolio_condensed$portfolio_return)
+
+monthly_std_SP500 <- sd(myportfolio_condensed$SPY_return)
+
+#annual_std <- sqrt(12) * monthly_std
+
+correlation <- cor(myportfolio_condensed$portfolio_return,
+                   myportfolio_condensed$SPY_return)
+
+#regress portfolio_return by SPY_return
+myportfolio_model <- myportfolio_condensed %>%
+  lm(portfolio_return ~ SPY_return, data = .) %>%
+  tidy()
+
+#generate the output values for alpha and beta
+alpha_output <- paste0(percent(myportfolio_model[1,]$estimate,
+                               accuracy = 0.001),
+                      " (",
+                      round(myportfolio_model[1,]$statistic, 3),
+                      ")")
+
+beta_output <- paste0(round(myportfolio_model[2,]$estimate, 3),
+                      " (",
+                      round(myportfolio_model[2,]$statistic, 3),
+                      ")")
+
+#calculate excess return over risk-free rate of the portfolio and SP500
+myportfolio_condensed <- myportfolio_condensed %>% 
+  mutate(portfolio_excess_return = portfolio_return - tbill_yield_monthly$t_bill_yield,
+         SP500_excess_return = SPY_return - tbill_yield_monthly$t_bill_yield)
+
+#calculate Sharpe ratio of the portfolio and SP500 and compare
+Sharpe_ratio_portfolio <- mean(myportfolio_condensed$portfolio_excess_return)/monthly_std
+
+Sharpe_ratio_SP500 <- mean(myportfolio_condensed$SP500_excess_return)/monthly_std_SP500
+
+compare <- ifelse(Sharpe_ratio_portfolio > Sharpe_ratio_SP500,
+                  "outperform SP500",
+                  "Underperform SP500")
+
+```
+
+Row 1 {data-height=300}
+-----------------------------------------------------------------------
+### Portfolio's monthly relative returns over SP500
+
+```{r}
+#use plotly to create interactive chart, so when we place our cursor on ti, we can see values
+
+#add text= in aes() to set tooltip for ggplotly
+fig1 <- ggplot(myportfolio_relative_returns,
+               aes(x = date, text = relative_return)) + 
+  
+  #line for relative returns
+  geom_line(aes(y = relative_return)) +
+  
+  #use geom_ribbon for positive and negative relative returns
+  geom_ribbon(aes(ymin = 0,
+                  ymax = positive_relative_return),
+              fill = "green4",
+              alpha = 0.7) +
+  geom_ribbon(aes(ymin = negative_relative_return,
+                  ymax = 0),
+              fill = "red3",
+              alpha = 0.7) +
+  
+  #use geom_rug for the small indicators at the bottom
+  geom_rug(data = myportfolio_relative_returns[myportfolio_relative_returns[ , "positive_relative_return"] != 0, , drop = FALSE],
+           color = "green4",
+           sides = "b") +
+  geom_rug(data = myportfolio_relative_returns[myportfolio_relative_returns[ , "negative_relative_return"] != 0, , drop = FALSE],
+           color = "red3",
+           sides = "b") +
+  
+  #some formatting
+  scale_y_continuous(label = scales::percent) +
+  labs(x = NULL,
+       y = "Relative Return") +
+  theme_bw() +
+  theme(text = element_text(size = 11),
+        panel.border = element_blank(),
+        axis.ticks = element_blank()) +
+  NULL
+
+  ggplotly(fig1, tooltip = c("x", "text"))
+
+```
+
+
+
+
+Row 2 {data-height=300}
+-----------------------------------------------------------------------
+### Component Stocks' Contributions to Portfolio's Total Relative Return
+
+```{r}
+
+#add text= in aes() to set tooltip for ggplotly
+fig2 <- ggplot(myportfolio_value,
+               aes(text = paste(asset,
+                                "\nTotal absolute/relative return:",
+                                percent(incremental_value)))) +
+  
+  #use geom_rect to produce the waterfall chart
+  geom_rect(aes(x = asset,
+                xmin = place - 0.4,
+                xmax = place + 0.4,
+                ymin = end,
+                ymax = start,
+                fill = type)) +
+  
+  #set color for each type
+  scale_fill_manual(name = NULL,
+                    values = type_colors) +
+  
+  #some formatting
+  scale_y_continuous(label = scales::percent) +
+  labs(x = NULL, y = NULL) +
+  theme_bw() +
+  theme(text = element_text(size = 11),
+        legend.position = "right",
+        panel.border = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_line(size = 0.5,
+                                          color = "grey",
+                                          linetype = "dashed"),
+        panel.grid.minor.y = element_blank(),
+        axis.ticks = element_blank()) +
+  NULL
+
+  ggplotly(fig2, tooltip = "text")
+
+```
+
+
+Row 3 {data-height=140}
+----------------------------------
+### Summary of the portfolio performance (all in monthly basis)
+
+```{r}
+
+#consolidate every data we need in the table
+fig3<-data.frame(matrix(nrow = 1,
+                        data = c(percent(monthly_return, accuracy = 0.001),
+                                 percent(monthly_std, accuracy = 0.001),
+                                 round(correlation, 3),
+                                 alpha_output,
+                                 beta_output,
+                                 round(Sharpe_ratio_portfolio, 3),
+                                 round(Sharpe_ratio_SP500, 3),
+                                 compare)))
+
+#assign column names to the table
+colnames(fig3) <- c("Average return",
+                    "Volatility",
+                    "Corr. with SP500",
+                    "Alpha (t-statistic)",
+                    "Beta (t-statistic)",
+                    "Sharpe ratio",
+                    "SP500 Sharpe ratio",
+                    "Compare")
+
+fig3
+
+```
+
+
+
+
+
+
+

@@ -1,12 +1,10 @@
-# individual_project
+# Individual Project
 Sid Chen's individual project for Data Analytics for Finance
 
-Hello World!
+Hi there! This project is aimed to build an interactive Shiny app to show a portfolio's performance against SP500 benchmark. In the app, you can choose 5 stocks and specify their weights to build your own portfolio, then it will generate the following three panels that will help you review the portfolio's past performance and compare it with SP500.
 
-Three interactive plots to show on my app:
+1. A table of **average return, standard deviation, correlation with SP500, alpha, beta, and Sharpe ratios**.
 
-1. **Line plot** for accumulated relative returns of the portfolio and its all component stocks against SP500.
+2. A **Line, ribbon and rug plots** for monthly relative return of the portfolio.
 
-2. **Line, ribbon and rug plots** for monthly relative return of the portfolio.
-
-3. **Faceted waterfall plot** of the portfolio's yearly returns.
+3. A **Waterfall chart** to breakdown each component stock's contribution to the portfolio's overall return.
